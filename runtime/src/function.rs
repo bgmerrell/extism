@@ -80,8 +80,11 @@ pub(crate) enum UserDataHandle {
     #[allow(dead_code)]
     C(Arc<CPtr>),
     #[allow(dead_code)]
-    Rust(Arc<std::sync::Mutex<dyn std::any::Any + Send>>),
+    Rust(Arc<std::sync::Mutex<dyn std::any::Any>>),
 }
+
+unsafe impl Send for UserDataHandle {}
+unsafe impl Sync for UserDataHandle {}
 
 /// UserData is used to store additional data that gets passed into host function callbacks
 ///
@@ -94,7 +97,7 @@ pub enum UserData<T: Sized> {
     Rust(Arc<std::sync::Mutex<T>>),
 }
 
-impl<T: Default + Send> Default for UserData<T> {
+impl<T: Default> Default for UserData<T> {
     fn default() -> Self {
         UserData::new(T::default())
     }
@@ -133,10 +136,7 @@ impl<T> UserData<T> {
     /// Create a new `UserData` from a Rust value
     ///
     /// This will wrap the provided value in a reference-counted mutex
-    pub fn new(x: T) -> Self
-    where
-        T: Send,
-    {
+    pub fn new(x: T) -> Self {
         let data = Arc::new(std::sync::Mutex::new(x));
         UserData::Rust(data)
     }
@@ -161,8 +161,8 @@ impl Drop for CPtr {
     }
 }
 
-unsafe impl<T: Send> Send for UserData<T> {}
-unsafe impl<T: Send> Sync for UserData<T> {}
+unsafe impl<T> Send for UserData<T> {}
+unsafe impl<T> Sync for UserData<T> {}
 unsafe impl Send for CPtr {}
 unsafe impl Sync for CPtr {}
 
@@ -191,7 +191,7 @@ pub struct Function {
 
 impl Function {
     /// Create a new host function
-    pub fn new<T: 'static + Send, F>(
+    pub fn new<T: 'static, F>(
         name: impl Into<String>,
         params: impl IntoIterator<Item = ValType>,
         results: impl IntoIterator<Item = ValType>,
