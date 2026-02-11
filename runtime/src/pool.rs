@@ -99,10 +99,11 @@ impl Pool {
     pub fn get(&self, timeout: std::time::Duration) -> Result<Option<PoolPlugin>, Error> {
         let start = std::time::Instant::now();
 
+        // Hold lock throughout except when waiting on condition variable
         let mut inner = self.inner.lock().unwrap();
 
         loop {
-            // Try to get an available plugin
+            // Try to pop an available plugin from the queue
             if let Some(plugin) = inner.available.pop_front() {
                 return Ok(Some(PoolPlugin {
                     plugin: Some(plugin),
@@ -111,7 +112,7 @@ impl Pool {
                 }));
             }
 
-            // Try to create a new plugin if under max
+            // Create new plugin if under capacity
             if inner.current_size < inner.max_size {
                 let plugin = (*inner.plugin_source)()?;
                 inner.current_size += 1;
@@ -122,13 +123,14 @@ impl Pool {
                 }));
             }
 
-            // Check timeout
+            // All plugins busy and at capacity. Check if we should keep waiting.
             let elapsed = std::time::Instant::now() - start;
             if elapsed >= timeout {
                 return Ok(None);
             }
 
-            // Wait for a plugin to be returned
+            // Wait for a plugin to be returned. wait_timeout releases the lock while
+            // waiting and re-acquires it when woken. Loop back to check availability.
             let remaining = timeout - elapsed;
             let (guard, wait_result) = self.cond.wait_timeout(inner, remaining).unwrap();
             inner = guard;
