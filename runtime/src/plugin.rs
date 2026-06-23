@@ -877,15 +877,12 @@ impl Plugin {
         let name = name.as_ref();
         let input = input.as_ref();
 
-        // Setup (instantiation, input marshalling) consumes fuel; keep it off
-        // the caller's budget. The real limit is armed just before the call.
+        // Setup (reset, instantiation, input marshalling) runs with fuel
+        // metering disabled, so none of it can trap on fuel. The caller's
+        // budget is armed later, just before func.call.
         Self::disable_fuel_metering(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
 
-        catch_out_of_fuel!(
-            &self.store,
-            self.reset_store(lock).map_err(wasmtime::Error::from_anyhow)
-        )
-        .map_err(|x| (x.into(), -1))?;
+        self.reset_store(lock).map_err(|x| (x, -1))?;
 
         self.instantiate(lock).map_err(|e| (e, -1))?;
 
