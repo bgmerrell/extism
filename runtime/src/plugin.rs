@@ -369,7 +369,7 @@ fn relink(
                     .is_none()
                 && linker
                     .get(&mut store, EXTISM_ENV_MODULE, import.name())
-                    .is_none()
+                    .is_err()
             {
                 let (kind, ty) = match import.ty() {
                     ExternType::Func(t) => ("function", t.to_string()),
@@ -461,9 +461,9 @@ impl Plugin {
             )?,
         );
         store.set_epoch_deadline(1);
-        if let Some(fuel) = compiled.options.fuel {
-            store.set_fuel(fuel)?;
-        }
+        // `relink` below instantiates the modules, which consumes fuel; keep
+        // that off the caller's budget. The real limit is armed per call.
+        Self::disable_fuel_metering(&mut store, compiled.options.fuel)?;
 
         let imports: Vec<Function> = compiled.options.functions.to_vec();
         let (instance_pre, linker, host_context) = relink(
@@ -526,9 +526,9 @@ impl Plugin {
             );
             self.store.set_epoch_deadline(1);
 
-            if let Some(fuel) = self.fuel {
-                self.store.set_fuel(fuel)?;
-            }
+            // `relink` below re-instantiates the modules, which consumes fuel;
+            // keep that off the caller's budget.
+            Self::disable_fuel_metering(&mut self.store, self.fuel)?;
 
             let (instance_pre, linker, host_context) = relink(
                 &engine,
@@ -643,7 +643,7 @@ impl Plugin {
         self.reset()?;
         let handle = self.current_plugin_mut().memory_new(bytes)?;
 
-        if let Some(f) = self
+        if let Ok(f) = self
             .linker
             .get(&mut self.store, EXTISM_ENV_MODULE, "input_set")
         {
@@ -660,7 +660,7 @@ impl Plugin {
             )?;
         }
 
-        if let Some(Extern::Global(ctxt)) =
+        if let Ok(Extern::Global(ctxt)) =
             self.linker
                 .get(&mut self.store, EXTISM_ENV_MODULE, "extism_context")
         {
@@ -675,7 +675,7 @@ impl Plugin {
     pub fn reset(&mut self) -> Result<(), Error> {
         let id = self.id.to_string();
 
-        if let Some(f) = self.linker.get(&mut self.store, EXTISM_ENV_MODULE, "reset") {
+        if let Ok(f) = self.linker.get(&mut self.store, EXTISM_ENV_MODULE, "reset") {
             catch_out_of_fuel!(
                 &self.store,
                 f.into_func()
@@ -805,34 +805,30 @@ impl Plugin {
         let out = &mut [Val::I64(0)];
         let out_len = &mut [Val::I64(0)];
         let store = &mut self.store;
-        if let Some(f) = self
+
+        let f = self
             .linker
             .get(&mut *store, EXTISM_ENV_MODULE, "output_offset")
-        {
-            catch_out_of_fuel!(
-                &store,
-                f.into_func()
-                    .unwrap()
-                    .call(&mut *store, &[], out)
-                    .context("call to set extism output offset failed")
-            )?;
-        } else {
-            anyhow::bail!("unable to set output")
-        }
-        if let Some(f) = self
+            .context("unable to set output")?;
+        catch_out_of_fuel!(
+            &store,
+            f.into_func()
+                .unwrap()
+                .call(&mut *store, &[], out)
+                .context("call to set extism output offset failed")
+        )?;
+
+        let f = self
             .linker
             .get(&mut *store, EXTISM_ENV_MODULE, "output_length")
-        {
-            catch_out_of_fuel!(
-                &store,
-                f.into_func()
-                    .unwrap()
-                    .call(&mut *store, &[], out_len)
-                    .context("call to set extism output length failed")
-            )?;
-        } else {
-            anyhow::bail!("unable to set output length")
-        }
+            .context("unable to set output length")?;
+        catch_out_of_fuel!(
+            &store,
+            f.into_func()
+                .unwrap()
+                .call(&mut *store, &[], out_len)
+                .context("call to set extism output length failed")
+        )?;
 
         let offs = out[0].unwrap_i64() as u64;
         let len = out_len[0].unwrap_i64() as u64;
@@ -881,9 +877,9 @@ impl Plugin {
         let name = name.as_ref();
         let input = input.as_ref();
 
-        if let Some(fuel) = self.fuel {
-            self.store.set_fuel(fuel).map_err(|x| (x.into(), -1))?;
-        }
+        // Setup (instantiation, input marshalling) consumes fuel; keep it off
+        // the caller's budget. The real limit is armed just before the call.
+        Self::disable_fuel_metering(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
 
         catch_out_of_fuel!(
             &self.store,
@@ -945,6 +941,10 @@ impl Plugin {
         self.store.epoch_deadline_trap();
         self.store.set_epoch_deadline(1);
         self.current_plugin_mut().start_time = std::time::Instant::now();
+
+        // Now that setup is complete, arm the caller's fuel limit so it bounds
+        // execution of the exported function only.
+        Self::apply_fuel_limit(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
 
         // Call the function
         let mut results = vec![wasmtime::Val::I32(0); n_results];
@@ -1208,7 +1208,7 @@ impl Plugin {
         self.error_msg = None;
         let (linker, mut store) = self.linker_and_store();
         #[allow(clippy::needless_borrows_for_generic_args)]
-        if let Some(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "error_set") {
+        if let Ok(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "error_set") {
             let x = f
                 .into_func()
                 .unwrap()
@@ -1219,6 +1219,28 @@ impl Plugin {
         } else {
             anyhow::bail!("Plugin::clear_error failed, extism:host/env::error_set not found")
         }
+    }
+
+    /// Grant the store effectively unlimited fuel so SDK setup work (module
+    /// instantiation, kernel calls) is not charged against the caller's budget.
+    /// No-op when fuel limiting is disabled.
+    fn disable_fuel_metering(
+        store: &mut Store<CurrentPlugin>,
+        fuel: Option<u64>,
+    ) -> Result<(), Error> {
+        if fuel.is_some() {
+            store.set_fuel(u64::MAX)?;
+        }
+        Ok(())
+    }
+
+    /// Arm the caller's configured fuel limit, bounding execution of the next
+    /// guest call. No-op when fuel limiting is disabled.
+    fn apply_fuel_limit(store: &mut Store<CurrentPlugin>, fuel: Option<u64>) -> Result<(), Error> {
+        if let Some(fuel) = fuel {
+            store.set_fuel(fuel)?;
+        }
+        Ok(())
     }
 
     /// Returns the amount of fuel consumed by the plugin.

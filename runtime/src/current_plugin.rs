@@ -169,7 +169,7 @@ impl CurrentPlugin {
 
     pub fn memory_bytes_mut(&mut self, handle: MemoryHandle) -> Result<&mut [u8], Error> {
         let (linker, store) = self.linker_and_store();
-        if let Some(mem) = linker.get(&mut *store, EXTISM_ENV_MODULE, "memory") {
+        if let Ok(mem) = linker.get(&mut *store, EXTISM_ENV_MODULE, "memory") {
             let mem = mem.into_memory().unwrap();
             let ptr = unsafe { mem.data_ptr(&*store).add(handle.offset() as usize) };
             if ptr.is_null() {
@@ -183,7 +183,7 @@ impl CurrentPlugin {
 
     pub fn memory_bytes(&mut self, handle: MemoryHandle) -> Result<&[u8], Error> {
         let (linker, store) = self.linker_and_store();
-        if let Some(mem) = linker.get(&mut *store, EXTISM_ENV_MODULE, "memory") {
+        if let Ok(mem) = linker.get(&mut *store, EXTISM_ENV_MODULE, "memory") {
             let mem = mem.into_memory().unwrap();
             let ptr = unsafe { mem.data_ptr(&*store).add(handle.offset() as usize) };
             if ptr.is_null() {
@@ -197,7 +197,7 @@ impl CurrentPlugin {
 
     pub fn host_context<T: 'static>(&mut self) -> Result<&mut T, Error> {
         let (linker, store) = self.linker_and_store();
-        let Some(Extern::Global(xs)) = linker.get(&mut *store, EXTISM_ENV_MODULE, "extism_context")
+        let Ok(Extern::Global(xs)) = linker.get(&mut *store, EXTISM_ENV_MODULE, "extism_context")
         else {
             anyhow::bail!("unable to locate an extism kernel global: extism_context",)
         };
@@ -226,22 +226,24 @@ impl CurrentPlugin {
                 length: 0,
             });
         }
+        let id = self.id;
         let (linker, mut store) = self.linker_and_store();
         let output = &mut [Val::I64(0)];
-        if let Some(f) = linker.get(&mut store, EXTISM_ENV_MODULE, "alloc") {
-            catch_out_of_fuel!(
-                &store,
-                f.into_func()
-                    .unwrap()
-                    .call(&mut *store, &[Val::I64(n as i64)], output)
-                    .context("failed to allocate extism memory")
-            )?;
-        } else {
-            anyhow::bail!("{} unable to allocate memory", self.id);
-        }
+
+        let f = linker
+            .get(&mut store, EXTISM_ENV_MODULE, "alloc")
+            .with_context(|| format!("{} unable to allocate memory", id))?;
+        catch_out_of_fuel!(
+            &store,
+            f.into_func()
+                .unwrap()
+                .call(&mut *store, &[Val::I64(n as i64)], output)
+                .context("failed to allocate extism memory")
+        )?;
+
         let offs = output[0].unwrap_i64() as u64;
         if offs == 0 {
-            anyhow::bail!("{} out of memory", self.id)
+            anyhow::bail!("{} out of memory", id)
         }
         trace!(
             plugin = self.id.to_string(),
@@ -258,34 +260,36 @@ impl CurrentPlugin {
     /// Free a block of Extism plugin memory
     pub fn memory_free(&mut self, handle: MemoryHandle) -> Result<(), Error> {
         let (linker, store) = self.linker_and_store();
-        if let Some(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "free") {
-            catch_out_of_fuel!(
-                &store,
-                f.into_func()
-                    .unwrap()
-                    .call(&mut *store, &[Val::I64(handle.offset as i64)], &mut [])
-                    .context("failed to free extism memory")
-            )?;
-        } else {
-            anyhow::bail!("unable to locate an extism kernel function: free",)
-        }
+
+        let f = linker
+            .get(&mut *store, EXTISM_ENV_MODULE, "free")
+            .context("unable to locate an extism kernel function: free")?;
+        catch_out_of_fuel!(
+            &store,
+            f.into_func()
+                .unwrap()
+                .call(&mut *store, &[Val::I64(handle.offset as i64)], &mut [])
+                .context("failed to free extism memory")
+        )?;
+
         Ok(())
     }
 
     pub fn memory_length(&mut self, offs: u64) -> Result<u64, Error> {
         let (linker, store) = self.linker_and_store();
         let output = &mut [Val::I64(0)];
-        if let Some(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "length") {
-            catch_out_of_fuel!(
-                &store,
-                f.into_func()
-                    .unwrap()
-                    .call(&mut *store, &[Val::I64(offs as i64)], output)
-                    .context("failed to get length of extism memory handle")
-            )?;
-        } else {
-            anyhow::bail!("unable to locate an extism kernel function: length",)
-        }
+
+        let f = linker
+            .get(&mut *store, EXTISM_ENV_MODULE, "length")
+            .context("unable to locate an extism kernel function: length")?;
+        catch_out_of_fuel!(
+            &store,
+            f.into_func()
+                .unwrap()
+                .call(&mut *store, &[Val::I64(offs as i64)], output)
+                .context("failed to get length of extism memory handle")
+        )?;
+
         let len = output[0].unwrap_i64() as u64;
         trace!(
             plugin = self.id.to_string(),
@@ -299,17 +303,18 @@ impl CurrentPlugin {
     pub fn memory_length_unsafe(&mut self, offs: u64) -> Result<u64, Error> {
         let (linker, store) = self.linker_and_store();
         let output = &mut [Val::I64(0)];
-        if let Some(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "length_unsafe") {
-            catch_out_of_fuel!(
-                &store,
-                f.into_func()
-                    .unwrap()
-                    .call(&mut *store, &[Val::I64(offs as i64)], output)
-                    .context("failed to get length of extism memory using length_unsafe")
-            )?;
-        } else {
-            anyhow::bail!("unable to locate an extism kernel function: length_unsafe",)
-        }
+
+        let f = linker
+            .get(&mut *store, EXTISM_ENV_MODULE, "length_unsafe")
+            .context("unable to locate an extism kernel function: length_unsafe")?;
+        catch_out_of_fuel!(
+            &store,
+            f.into_func()
+                .unwrap()
+                .call(&mut *store, &[Val::I64(offs as i64)], output)
+                .context("failed to get length of extism memory using length_unsafe")
+        )?;
+
         let len = output[0].unwrap_i64() as u64;
         trace!(
             plugin = self.id.to_string(),
@@ -424,7 +429,8 @@ impl CurrentPlugin {
     pub(crate) fn memory(&mut self) -> Option<wasmtime::Memory> {
         let (linker, mut store) = self.linker_and_store();
         linker
-            .get(&mut store, EXTISM_ENV_MODULE, "memory")?
+            .get(&mut store, EXTISM_ENV_MODULE, "memory")
+            .ok()?
             .into_memory()
     }
 
@@ -452,7 +458,7 @@ impl CurrentPlugin {
     pub fn clear_error(&mut self) {
         trace!(plugin = self.id.to_string(), "CurrentPlugin::clear_error");
         let (linker, store) = self.linker_and_store();
-        if let Some(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "error_set") {
+        if let Ok(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "error_set") {
             let res = f
                 .into_func()
                 .unwrap()
@@ -486,7 +492,7 @@ impl CurrentPlugin {
         debug!(plugin = self.id.to_string(), "set error: {:?}", s);
         let handle = self.memory_new(s)?;
         let (linker, store) = self.linker_and_store();
-        if let Some(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "error_set") {
+        if let Ok(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "error_set") {
             catch_out_of_fuel!(
                 &store,
                 f.into_func()
@@ -503,7 +509,7 @@ impl CurrentPlugin {
     pub(crate) fn get_error_position(&mut self) -> (u64, u64) {
         let (linker, store) = self.linker_and_store();
         let output = &mut [Val::I64(0)];
-        if let Some(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "error_get") {
+        if let Ok(f) = linker.get(&mut *store, EXTISM_ENV_MODULE, "error_get") {
             if let Err(e) = catch_out_of_fuel!(
                 &store,
                 f.into_func().unwrap().call(&mut *store, &[], output)
