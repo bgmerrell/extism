@@ -348,40 +348,33 @@ impl CurrentPlugin {
         id: uuid::Uuid,
     ) -> Result<Self, Error> {
         let wasi = if wasi {
-            let auth = wasi_common::sync::ambient_authority();
-            let random = wasi_common::sync::random_ctx();
-            let clocks = wasi_common::sync::clocks_ctx();
-            let sched = wasi_common::sync::sched_ctx();
-            let table = wasi_common::Table::new();
-            let ctx = wasi_common::WasiCtx::new(random, clocks, sched, table);
+            let mut ctx = wasmtime_wasi::WasiCtxBuilder::new();
 
-            if let Some(a) = &manifest.allowed_paths {
-                for (k, v) in a.iter() {
-                    let readonly = k.starts_with("ro:");
-
-                    let dir_path = if readonly { &k[3..] } else { k };
-
-                    let dir = wasi_common::sync::dir::Dir::from_cap_std(
-                        wasi_common::sync::Dir::open_ambient_dir(dir_path, auth)?,
-                    );
-
-                    let file: Box<dyn wasi_common::dir::WasiDir> = if readonly {
-                        Box::new(readonly_dir::ReadOnlyDir::new(dir))
+            if let Some(paths) = &manifest.allowed_paths {
+                for (host_path, guest_path) in paths {
+                    let readonly = host_path.starts_with("ro:");
+                    let host_path = host_path.strip_prefix("ro:").unwrap_or(host_path);
+                    let perms = if readonly {
+                        wasmtime_wasi::FsPerms::ReadOnly
                     } else {
-                        Box::new(dir)
+                        wasmtime_wasi::FsPerms::ReadWrite
                     };
 
-                    ctx.push_preopened_dir(file, v)?;
+                    let guest_path = guest_path.to_str().ok_or_else(|| {
+                        anyhow::anyhow!("WASI guest path is not valid UTF-8: {guest_path:?}")
+                    })?;
+                    ctx.preopened_dir(host_path, guest_path, perms)?;
                 }
             }
 
             // Enable WASI output, typically used for debugging purposes
             if std::env::var("EXTISM_ENABLE_WASI_OUTPUT").is_ok() {
-                ctx.set_stderr(Box::new(wasi_common::sync::stdio::stderr()));
-                ctx.set_stdout(Box::new(wasi_common::sync::stdio::stdout()));
+                ctx.inherit_stderr().inherit_stdout();
             }
 
-            Some(Wasi { ctx })
+            Some(Wasi {
+                ctx: ctx.build_p1(),
+            })
         } else {
             None
         };
