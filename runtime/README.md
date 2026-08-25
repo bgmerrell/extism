@@ -234,7 +234,7 @@ tracing_subscriber::fmt::init();
 
 To enable or disable caching for plugin compilation, you need to provide a configuration file that will be used by the [wasmtime crate](https://github.com/bytecodealliance/wasmtime).
 
-Wasmtime 48 treats every cache setting as optional; the old `enabled` key is no longer required. See the [Wasmtime cache documentation](https://docs.wasmtime.dev/cli-cache.html) for the available settings.
+See the [Wasmtime cache documentation](https://docs.wasmtime.dev/cli-cache.html) for the available settings.
 
 An example configuration for caching is:
 
