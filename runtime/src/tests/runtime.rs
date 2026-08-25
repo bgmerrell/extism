@@ -244,7 +244,7 @@ fn test_fuel() {
     let manifest = Manifest::new([extism_manifest::Wasm::data(WASM_LOOP)]);
     let mut plugin = PluginBuilder::new(manifest)
         .with_wasi(true)
-        .with_fuel_limit(1)
+        .with_fuel_limit(2)
         .build()
         .unwrap();
     for _ in 0..10001 {
@@ -253,6 +253,72 @@ fn test_fuel() {
         println!("Fuel limited plugin exited with error: {:?}", &err);
         assert!(err.contains("fuel"));
     }
+}
+
+fn assert_fuel_error(err: &Error) {
+    assert!(
+        err.chain().any(|cause| cause.to_string().contains("fuel")),
+        "unexpected error: {err:#}"
+    );
+}
+
+#[test]
+fn test_fuel_limits_reactor_initialization() {
+    let wasm = r#"
+        (module
+            (func (export "_initialize")
+                (loop br 0))
+            (func (export "run")))
+    "#;
+
+    let err = PluginBuilder::new(wat::parse_str(wasm).unwrap())
+        .with_fuel_limit(100_000)
+        .build()
+        .err()
+        .expect("infinite reactor initialization should exhaust fuel");
+
+    assert_fuel_error(&err);
+}
+
+#[test]
+fn test_fuel_limits_module_start() {
+    let wasm = r#"
+        (module
+            (func $spin
+                (loop br 0))
+            (start $spin)
+            (func (export "_start")))
+    "#;
+
+    let mut plugin = PluginBuilder::new(wat::parse_str(wasm).unwrap())
+        .with_fuel_limit(100_000)
+        .build()
+        .expect("command instantiation should be deferred until call");
+    let err = plugin
+        .call::<(), ()>("_start", ())
+        .expect_err("infinite module start should exhaust fuel");
+
+    assert_fuel_error(&err);
+}
+
+#[test]
+fn test_fuel_limits_guest_constructors() {
+    let wasm = r#"
+        (module
+            (func (export "__wasm_call_ctors")
+                (loop br 0))
+            (func (export "run")))
+    "#;
+
+    let mut plugin = PluginBuilder::new(wat::parse_str(wasm).unwrap())
+        .with_fuel_limit(100_000)
+        .build()
+        .expect("plugin should build before constructors run");
+    let err = plugin
+        .call::<(), ()>("run", ())
+        .expect_err("infinite guest constructors should exhaust fuel");
+
+    assert_fuel_error(&err);
 }
 
 #[test]

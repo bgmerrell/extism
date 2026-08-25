@@ -461,9 +461,9 @@ impl Plugin {
             )?,
         );
         store.set_epoch_deadline(1);
-        // `relink` below instantiates the modules, which consumes fuel; keep
-        // that off the caller's budget. The real limit is armed per call.
-        Self::disable_fuel_metering(&mut store, compiled.options.fuel)?;
+        // `relink` may instantiate reactor modules and run guest initialization,
+        // so bound it with the configured fuel limit.
+        Self::apply_fuel_limit(&mut store, compiled.options.fuel)?;
 
         let imports: Vec<Function> = compiled.options.functions.to_vec();
         let (instance_pre, linker, host_context) = relink(
@@ -526,9 +526,9 @@ impl Plugin {
             );
             self.store.set_epoch_deadline(1);
 
-            // `relink` below re-instantiates the modules, which consumes fuel;
-            // keep that off the caller's budget.
-            Self::disable_fuel_metering(&mut self.store, self.fuel)?;
+            // `relink` may instantiate reactor modules and run guest
+            // initialization, so keep it within this call's fuel budget.
+            Self::apply_fuel_limit(&mut self.store, self.fuel)?;
 
             let (instance_pre, linker, host_context) = relink(
                 &engine,
@@ -877,10 +877,9 @@ impl Plugin {
         let name = name.as_ref();
         let input = input.as_ref();
 
-        // Setup (reset, instantiation, input marshalling) runs with fuel
-        // metering disabled, so none of it can trap on fuel. The caller's
-        // budget is armed later, just before func.call.
-        Self::disable_fuel_metering(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
+        // Apply one budget to all WebAssembly executed while preparing and
+        // performing this call, including instantiation and guest initialization.
+        Self::apply_fuel_limit(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
 
         self.reset_store(lock).map_err(|x| (x, -1))?;
 
@@ -938,10 +937,6 @@ impl Plugin {
         self.store.epoch_deadline_trap();
         self.store.set_epoch_deadline(1);
         self.current_plugin_mut().start_time = std::time::Instant::now();
-
-        // Now that setup is complete, arm the caller's fuel limit so it bounds
-        // execution of the exported function only.
-        Self::apply_fuel_limit(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
 
         // Call the function
         let mut results = vec![wasmtime::Val::I32(0); n_results];
@@ -1218,21 +1213,9 @@ impl Plugin {
         }
     }
 
-    /// Grant the store effectively unlimited fuel so SDK setup work (module
-    /// instantiation, kernel calls) is not charged against the caller's budget.
+    /// Apply the configured fuel limit before WebAssembly can execute. This
+    /// bounds module instantiation, guest initialization, and exported calls.
     /// No-op when fuel limiting is disabled.
-    fn disable_fuel_metering(
-        store: &mut Store<CurrentPlugin>,
-        fuel: Option<u64>,
-    ) -> Result<(), Error> {
-        if fuel.is_some() {
-            store.set_fuel(u64::MAX)?;
-        }
-        Ok(())
-    }
-
-    /// Arm the caller's configured fuel limit, bounding execution of the next
-    /// guest call. No-op when fuel limiting is disabled.
     fn apply_fuel_limit(store: &mut Store<CurrentPlugin>, fuel: Option<u64>) -> Result<(), Error> {
         if let Some(fuel) = fuel {
             store.set_fuel(fuel)?;
