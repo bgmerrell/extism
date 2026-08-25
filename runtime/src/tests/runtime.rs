@@ -244,7 +244,9 @@ fn test_fuel() {
     let manifest = Manifest::new([extism_manifest::Wasm::data(WASM_LOOP)]);
     let mut plugin = PluginBuilder::new(manifest)
         .with_wasi(true)
-        .with_fuel_limit(2)
+        // Leave a small amount of headroom for metered module initialization;
+        // its exact fuel cost is not a stable Wasmtime API.
+        .with_fuel_limit(10)
         .build()
         .unwrap();
     for _ in 0..10001 {
