@@ -234,27 +234,24 @@ tracing_subscriber::fmt::init();
 
 To enable or disable caching for plugin compilation, you need to provide a configuration file that will be used by the [wasmtime crate](https://github.com/bytecodealliance/wasmtime).
 
-For more information and values that can be used for configuring caching, take a look at [the docs](https://docs.wasmtime.dev/cli-cache.html).
+See the [Wasmtime cache documentation](https://docs.wasmtime.dev/cli-cache.html) for the available settings.
 
-> *Note*: As of now extism uses wasmtime [`version = ">= 27.0.0, < 31.0.0"`](https://github.com/extism/extism/blob/v1.11.1/runtime/Cargo.toml#L12), but the `enabled` key requirement [was removed](https://github.com/bytecodealliance/wasmtime/pull/10859) from `wasmtime` and its documentation, this could explain the `failed to parse config file` error you might encounter without it.
-
-An example configuration for caching would be:
+An example configuration for caching is:
 
 ```toml
 [cache]
-enabled = true # This value is required
 directory = "/some/path"
 ```
 
-You can :
+You can:
+
 - [Create a global `wasmtime` configuration file](#using-a-configuration-file) in `$HOME/.config/wasmtime/config.toml`.
 - [Set the `EXTISM_CACHE_CONFIG` environment variable](#using-an-environment-variable)
 - [Set the configuration file path using `PluginBuilder`](#using-pluginbuilder)
 
 #### Using a configuration file
 
-The [wasmtime](https://github.com/bytecodealliance/wasmtime) crate, by default, will look for a configuration file in your systems' default configuration directory (for example on UNIX systems: `$HOME/.config/wasmtime/config.toml`),
-for more [information on this behaviour](`https://docs.rs/wasmtime/31.0.0/wasmtime/struct.Config.html#method.cache_config_load_default`).
+The [wasmtime](https://github.com/bytecodealliance/wasmtime) crate looks for a configuration file in your system's default configuration directory (for example, `$HOME/.config/wasmtime/config.toml` on UNIX systems). See [`Cache::from_file`](https://docs.rs/wasmtime/latest/wasmtime/struct.Cache.html#method.from_file) for details.
 
 #### Using an environment variable
 
@@ -263,7 +260,7 @@ Setting the variable to an empty string will disable caching (it won't load any 
 
 > *Note*: If the environment variable is not set, `wasmtime` will still try to read from a configuration file that may exist in your system's default configuration folder (e.g. `$HOME/.config/wasmtime/config.toml`).
 
-The environment variable does not override the path you might have set using `PluginBuilder`. will only be checked for if you did not specify a cache configuration path in `PluginBuilder`.
+The environment variable does not override a path set using `PluginBuilder`; it is checked only when no cache configuration path was specified in `PluginBuilder`.
 
 #### Using PluginBuilder
 

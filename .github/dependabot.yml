@@ -11,5 +11,5 @@ updates:
       interval: "weekly"
     ignore:
       - dependency-name: "wasmtime"
-      - dependency-name: "wasi-common"
+      - dependency-name: "wasmtime-wasi"
 

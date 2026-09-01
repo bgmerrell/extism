@@ -51,6 +51,10 @@ pub struct CompiledPlugin {
 impl CompiledPlugin {
     /// Create a new pre-compiled plugin
     pub fn new(builder: PluginBuilder) -> Result<CompiledPlugin, Error> {
+        if builder.options.initialization_fuel.is_some() && builder.options.fuel.is_none() {
+            anyhow::bail!("an initialization fuel limit requires a call fuel limit");
+        }
+
         let mut config = builder.config.unwrap_or_default();
         config
             .epoch_interruption(true)
@@ -175,6 +179,8 @@ pub struct Plugin {
     pub(crate) error_msg: Option<Vec<u8>>,
 
     pub(crate) fuel: Option<u64>,
+
+    pub(crate) initialization_fuel: Option<u64>,
 
     pub(crate) host_context: Rooted<ExternRef>,
 }
@@ -394,7 +400,7 @@ fn relink(
 
     // If wasi is enabled then add it to the linker
     if with_wasi {
-        wasi_common::sync::add_to_linker(&mut linker, |x: &mut CurrentPlugin| {
+        wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |x: &mut CurrentPlugin| {
             &mut x.wasi.as_mut().unwrap().ctx
         })?;
     }
@@ -461,9 +467,10 @@ impl Plugin {
             )?,
         );
         store.set_epoch_deadline(1);
-        // `relink` below instantiates the modules, which consumes fuel; keep
-        // that off the caller's budget. The real limit is armed per call.
-        Self::disable_fuel_metering(&mut store, compiled.options.fuel)?;
+        // Reactor modules can execute initialization during linking. Use the
+        // initialization override when configured, otherwise preserve the
+        // existing behavior by falling back to the call fuel limit.
+        Self::apply_fuel_limit(&mut store, compiled.options.effective_initialization_fuel())?;
 
         let imports: Vec<Function> = compiled.options.functions.to_vec();
         let (instance_pre, linker, host_context) = relink(
@@ -491,6 +498,7 @@ impl Plugin {
             _functions: imports,
             error_msg: None,
             fuel: compiled.options.fuel,
+            initialization_fuel: compiled.options.effective_initialization_fuel(),
             host_context,
         };
 
@@ -526,9 +534,9 @@ impl Plugin {
             );
             self.store.set_epoch_deadline(1);
 
-            // `relink` below re-instantiates the modules, which consumes fuel;
-            // keep that off the caller's budget.
-            Self::disable_fuel_metering(&mut self.store, self.fuel)?;
+            // A new store starts with no fuel. Restore the effective
+            // initialization budget before relinking can execute WebAssembly.
+            Self::apply_fuel_limit(&mut self.store, self.initialization_fuel)?;
 
             let (instance_pre, linker, host_context) = relink(
                 &engine,
@@ -877,14 +885,18 @@ impl Plugin {
         let name = name.as_ref();
         let input = input.as_ref();
 
-        // Setup (reset, instantiation, input marshalling) runs with fuel
-        // metering disabled, so none of it can trap on fuel. The caller's
-        // budget is armed later, just before func.call.
-        Self::disable_fuel_metering(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
+        // Apply the effective initialization budget before reset, relinking,
+        // instantiation, or guest initialization can execute WebAssembly.
+        Self::apply_fuel_limit(&mut self.store, self.initialization_fuel).map_err(|x| (x, -1))?;
 
         self.reset_store(lock).map_err(|x| (x, -1))?;
 
         self.instantiate(lock).map_err(|e| (e, -1))?;
+
+        // Initialization has finished. Refill the normal call budget before
+        // input marshalling so Extism kernel operations retain their upstream
+        // fuel accounting behavior.
+        Self::apply_fuel_limit(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
 
         // Set host context
         let r = if let Some(host_context) = host_context {
@@ -938,10 +950,6 @@ impl Plugin {
         self.store.epoch_deadline_trap();
         self.store.set_epoch_deadline(1);
         self.current_plugin_mut().start_time = std::time::Instant::now();
-
-        // Now that setup is complete, arm the caller's fuel limit so it bounds
-        // execution of the exported function only.
-        Self::apply_fuel_limit(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
 
         // Call the function
         let mut results = vec![wasmtime::Val::I32(0); n_results];
@@ -1058,7 +1066,7 @@ impl Plugin {
                     }
                 }
 
-                let wasi_exit_code = e.downcast_ref::<wasi_common::I32Exit>().map(|e| e.0);
+                let wasi_exit_code = e.downcast_ref::<wasmtime_wasi::I32Exit>().map(|e| e.0);
                 if let Some(exit_code) = wasi_exit_code {
                     debug!(
                         plugin = self.id.to_string(),
@@ -1218,21 +1226,9 @@ impl Plugin {
         }
     }
 
-    /// Grant the store effectively unlimited fuel so SDK setup work (module
-    /// instantiation, kernel calls) is not charged against the caller's budget.
+    /// Apply the configured fuel limit before WebAssembly can execute. This
+    /// bounds module instantiation, guest initialization, and exported calls.
     /// No-op when fuel limiting is disabled.
-    fn disable_fuel_metering(
-        store: &mut Store<CurrentPlugin>,
-        fuel: Option<u64>,
-    ) -> Result<(), Error> {
-        if fuel.is_some() {
-            store.set_fuel(u64::MAX)?;
-        }
-        Ok(())
-    }
-
-    /// Arm the caller's configured fuel limit, bounding execution of the next
-    /// guest call. No-op when fuel limiting is disabled.
     fn apply_fuel_limit(store: &mut Store<CurrentPlugin>, fuel: Option<u64>) -> Result<(), Error> {
         if let Some(fuel) = fuel {
             store.set_fuel(fuel)?;
