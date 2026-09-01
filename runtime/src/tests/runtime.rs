@@ -276,8 +276,7 @@ fn test_fuel_limits_reactor_initialization() {
     let err = PluginBuilder::new(wat::parse_str(wasm).unwrap())
         .with_fuel_limit(100_000)
         .build()
-        .err()
-        .expect("infinite reactor initialization should exhaust fuel");
+        .expect_err("infinite reactor initialization should exhaust fuel");
 
     assert_fuel_error(&err);
 }

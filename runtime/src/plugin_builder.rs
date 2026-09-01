@@ -164,7 +164,10 @@ impl<'a> PluginBuilder<'a> {
         self
     }
 
-    /// Limit the number of instructions that can be executed
+    /// Limit fuel consumed by guest WebAssembly execution.
+    ///
+    /// The limit applies to module instantiation, initialization functions,
+    /// constructors, and each exported function call.
     pub fn with_fuel_limit(mut self, fuel: u64) -> Self {
         self.options.fuel = Some(fuel);
         self

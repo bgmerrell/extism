@@ -243,7 +243,8 @@ An example configuration for caching is:
 directory = "/some/path"
 ```
 
-You can :
+You can:
+
 - [Create a global `wasmtime` configuration file](#using-a-configuration-file) in `$HOME/.config/wasmtime/config.toml`.
 - [Set the `EXTISM_CACHE_CONFIG` environment variable](#using-an-environment-variable)
 - [Set the configuration file path using `PluginBuilder`](#using-pluginbuilder)
