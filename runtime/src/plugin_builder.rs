@@ -47,7 +47,14 @@ pub(crate) struct PluginBuilderOptions {
     pub(crate) debug_options: DebugOptions,
     pub(crate) cache_config: Option<Option<PathBuf>>,
     pub(crate) fuel: Option<u64>,
+    pub(crate) initialization_fuel: Option<u64>,
     pub(crate) http_response_headers: bool,
+}
+
+impl PluginBuilderOptions {
+    pub(crate) fn effective_initialization_fuel(&self) -> Option<u64> {
+        self.initialization_fuel.or(self.fuel)
+    }
 }
 
 impl<'a> PluginBuilder<'a> {
@@ -62,6 +69,7 @@ impl<'a> PluginBuilder<'a> {
                 debug_options: DebugOptions::default(),
                 cache_config: None,
                 fuel: None,
+                initialization_fuel: None,
                 http_response_headers: false,
             },
         }
@@ -164,11 +172,22 @@ impl<'a> PluginBuilder<'a> {
         self
     }
 
-    /// Limits fuel consumed by all WebAssembly execution in the plugin's Wasmtime
-    /// store, including initialization functions, constructors, Extism kernel
-    /// operations, and exported function calls.
+    /// Limits fuel consumed during each plugin call.
+    ///
+    /// Unless overridden by [`PluginBuilder::with_initialization_fuel_limit`],
+    /// this also limits initialization.
     pub fn with_fuel_limit(mut self, fuel: u64) -> Self {
         self.options.fuel = Some(fuel);
+        self
+    }
+
+    /// Override the fuel available for plugin initialization.
+    ///
+    /// Initialization includes linking, instantiation, initialization functions,
+    /// and constructors. A call fuel limit must also be configured using
+    /// [`PluginBuilder::with_fuel_limit`].
+    pub fn with_initialization_fuel_limit(mut self, fuel: u64) -> Self {
+        self.options.initialization_fuel = Some(fuel);
         self
     }
 

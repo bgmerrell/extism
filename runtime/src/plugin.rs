@@ -51,6 +51,10 @@ pub struct CompiledPlugin {
 impl CompiledPlugin {
     /// Create a new pre-compiled plugin
     pub fn new(builder: PluginBuilder) -> Result<CompiledPlugin, Error> {
+        if builder.options.initialization_fuel.is_some() && builder.options.fuel.is_none() {
+            anyhow::bail!("an initialization fuel limit requires a call fuel limit");
+        }
+
         let mut config = builder.config.unwrap_or_default();
         config
             .epoch_interruption(true)
@@ -175,6 +179,8 @@ pub struct Plugin {
     pub(crate) error_msg: Option<Vec<u8>>,
 
     pub(crate) fuel: Option<u64>,
+
+    pub(crate) initialization_fuel: Option<u64>,
 
     pub(crate) host_context: Rooted<ExternRef>,
 }
@@ -461,9 +467,10 @@ impl Plugin {
             )?,
         );
         store.set_epoch_deadline(1);
-        // `relink` may instantiate reactor modules and run guest initialization,
-        // so bound it with the configured fuel limit.
-        Self::apply_fuel_limit(&mut store, compiled.options.fuel)?;
+        // Reactor modules can execute initialization during linking. Use the
+        // initialization override when configured, otherwise preserve the
+        // existing behavior by falling back to the call fuel limit.
+        Self::apply_fuel_limit(&mut store, compiled.options.effective_initialization_fuel())?;
 
         let imports: Vec<Function> = compiled.options.functions.to_vec();
         let (instance_pre, linker, host_context) = relink(
@@ -491,6 +498,7 @@ impl Plugin {
             _functions: imports,
             error_msg: None,
             fuel: compiled.options.fuel,
+            initialization_fuel: compiled.options.effective_initialization_fuel(),
             host_context,
         };
 
@@ -526,9 +534,9 @@ impl Plugin {
             );
             self.store.set_epoch_deadline(1);
 
-            // `relink` may instantiate reactor modules and run guest
-            // initialization, so keep it within this call's fuel budget.
-            Self::apply_fuel_limit(&mut self.store, self.fuel)?;
+            // A new store starts with no fuel. Restore the effective
+            // initialization budget before relinking can execute WebAssembly.
+            Self::apply_fuel_limit(&mut self.store, self.initialization_fuel)?;
 
             let (instance_pre, linker, host_context) = relink(
                 &engine,
@@ -877,13 +885,18 @@ impl Plugin {
         let name = name.as_ref();
         let input = input.as_ref();
 
-        // Apply one budget to all WebAssembly executed while preparing and
-        // performing this call, including instantiation and guest initialization.
-        Self::apply_fuel_limit(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
+        // Apply the effective initialization budget before reset, relinking,
+        // instantiation, or guest initialization can execute WebAssembly.
+        Self::apply_fuel_limit(&mut self.store, self.initialization_fuel).map_err(|x| (x, -1))?;
 
         self.reset_store(lock).map_err(|x| (x, -1))?;
 
         self.instantiate(lock).map_err(|e| (e, -1))?;
+
+        // Initialization has finished. Refill the normal call budget before
+        // input marshalling so Extism kernel operations retain their upstream
+        // fuel accounting behavior.
+        Self::apply_fuel_limit(&mut self.store, self.fuel).map_err(|x| (x, -1))?;
 
         // Set host context
         let r = if let Some(host_context) = host_context {

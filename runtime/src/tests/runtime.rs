@@ -244,9 +244,10 @@ fn test_fuel() {
     let manifest = Manifest::new([extism_manifest::Wasm::data(WASM_LOOP)]);
     let mut plugin = PluginBuilder::new(manifest)
         .with_wasi(true)
-        // Leave a small amount of headroom for metered module initialization;
-        // its exact fuel cost is not a stable Wasmtime API.
-        .with_fuel_limit(10)
+        .with_fuel_limit(1)
+        // Initialization costs are Wasmtime implementation details, so give
+        // initialization a separate budget from the deliberately tiny call.
+        .with_initialization_fuel_limit(10)
         .build()
         .unwrap();
     for _ in 0..10001 {
@@ -265,6 +266,22 @@ fn assert_fuel_error(err: &Error) {
 }
 
 #[test]
+fn test_initialization_fuel_requires_call_fuel() {
+    let result = PluginBuilder::new(WASM)
+        .with_initialization_fuel_limit(10)
+        .compile();
+    let err = match result {
+        Ok(_) => panic!("initialization fuel without call fuel should fail"),
+        Err(err) => err,
+    };
+
+    assert_eq!(
+        err.to_string(),
+        "an initialization fuel limit requires a call fuel limit"
+    );
+}
+
+#[test]
 fn test_fuel_limits_reactor_initialization() {
     let wasm = r#"
         (module
@@ -274,7 +291,8 @@ fn test_fuel_limits_reactor_initialization() {
     "#;
 
     let err = PluginBuilder::new(wat::parse_str(wasm).unwrap())
-        .with_fuel_limit(100_000)
+        .with_fuel_limit(1_000_000)
+        .with_initialization_fuel_limit(100_000)
         .build()
         .expect_err("infinite reactor initialization should exhaust fuel");
 
