@@ -28,15 +28,6 @@ There are a few environment variables that can be used for debugging purposes:
 
 > *Note*: The debug and coredump info will only be written if the plug-in has an error.
 
-## Fuel limits
-
-[`PluginBuilder::with_fuel_limit`](https://docs.rs/extism/latest/extism/struct.PluginBuilder.html#method.with_fuel_limit)
-sets the fuel available for each plugin call. This budget includes input and output handling by the Extism kernel as well as the exported function and any linked WebAssembly it executes.
-
-By default, the same limit bounds plugin initialization. Use
-[`PluginBuilder::with_initialization_fuel_limit`](https://docs.rs/extism/latest/extism/struct.PluginBuilder.html#method.with_initialization_fuel_limit)
-to give linking, instantiation, initialization functions, and constructors a separate budget. An initialization fuel limit requires a call fuel limit. If no fuel limit is configured, fuel metering remains disabled.
-
 ## Getting Started
 
 This guide should walk you through some of the concepts in Extism and the `extism` crate.
