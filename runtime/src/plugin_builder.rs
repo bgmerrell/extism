@@ -164,10 +164,9 @@ impl<'a> PluginBuilder<'a> {
         self
     }
 
-    /// Limit fuel consumed by guest WebAssembly execution.
-    ///
-    /// The limit applies to module instantiation, initialization functions,
-    /// constructors, and each exported function call.
+    /// Limits fuel consumed by all WebAssembly execution in the plugin's Wasmtime
+    /// store, including initialization functions, constructors, Extism kernel
+    /// operations, and exported function calls.
     pub fn with_fuel_limit(mut self, fuel: u64) -> Self {
         self.options.fuel = Some(fuel);
         self
